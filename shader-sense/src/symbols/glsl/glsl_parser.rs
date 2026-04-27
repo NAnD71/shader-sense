@@ -52,6 +52,11 @@ impl SymbolTreeParser for GlslFunctionTreeParser {
         let scope_stack = self.compute_scope_stack(scopes, &range);
         // Query internal scopes variables
         let scope_node = symbol_match.captures[symbol_match.captures.len() - 1].node;
+        let parameter_scope_stack = {
+            let mut s = scope_stack.clone();
+            s.push(ShaderRange::from(scope_node.range()));
+            s
+        };
         /*let content_scope_stack = {
             let mut s = scope_stack.clone();
             s.push(range.clone());
@@ -66,6 +71,34 @@ impl SymbolTreeParser for GlslFunctionTreeParser {
             scope_stack.is_empty(),
             "In GLSL all function are global scope"
         );
+        let parameters = symbol_match.captures[2..symbol_match.captures.len() - 1]
+            .chunks(2)
+            .map(|w| {
+                let ty: String = get_name(shader_content, w[0].node).into();
+                let label: String = get_name(shader_content, w[1].node).into();
+                symbols.add_variable(ShaderSymbol {
+                    label: label.clone(),
+                    requirement: None,
+                    data: ShaderSymbolData::Variables {
+                        ty: ty.clone(),
+                        count: None,
+                    },
+                    mode: ShaderSymbolMode::Runtime(ShaderSymbolRuntime::new(
+                        file_path.into(),
+                        ShaderRange::from(w[1].node.range()),
+                        None,
+                        parameter_scope_stack.clone(),
+                    )),
+                });
+                ShaderParameter {
+                    ty,
+                    label,
+                    count: None,
+                    description: "".into(),
+                    range: Some(ShaderRange::from(w[1].node.range())),
+                }
+            })
+            .collect::<Vec<ShaderParameter>>();
         symbols.add_function(ShaderSymbol {
             label: get_name(shader_content, symbol_match.captures[1].node).into(),
             requirement: None,
@@ -73,16 +106,7 @@ impl SymbolTreeParser for GlslFunctionTreeParser {
                 signatures: vec![ShaderSignature {
                     returnType: get_name(shader_content, symbol_match.captures[0].node).into(),
                     description: "".into(),
-                    parameters: symbol_match.captures[2..symbol_match.captures.len() - 1]
-                        .chunks(2)
-                        .map(|w| ShaderParameter {
-                            ty: get_name(shader_content, w[0].node).into(),
-                            label: get_name(shader_content, w[1].node).into(),
-                            count: None,
-                            description: "".into(),
-                            range: Some(ShaderRange::from(w[1].node.range())),
-                        })
-                        .collect::<Vec<ShaderParameter>>(),
+                    parameters,
                 }],
             },
             mode: ShaderSymbolMode::Runtime(ShaderSymbolRuntime::new(
@@ -273,10 +297,20 @@ impl SymbolTreeParser for GlslVariableTreeParser {
                 (primitive_type) @variable.type
             ]
             declarator: [(init_declarator
-                declarator: (identifier) @variable.label
+                declarator: [
+                    (identifier) @variable.label
+                    (array_declarator
+                        declarator: (identifier) @variable.label
+                        (_)? @variable.count
+                    )
+                ]
                 value: (_) @variable.value
             ) 
             (identifier) @variable.label
+            (array_declarator
+                declarator: (identifier) @variable.label
+                (_)? @variable.count
+            )
             ]
         )"#
         .into()

@@ -266,6 +266,70 @@ mod tests {
         }
     }
     #[test]
+    fn glsl_function_parameters_and_arrays_are_scoped_variables() {
+        let file_path = Path::new("./test/glsl/parameter-array-symbols.glsl");
+        let shader_content = std::fs::read_to_string(file_path).unwrap();
+        let mut shader_module_parser =
+            ShaderModuleParser::from_shading_language(ShadingLanguage::Glsl);
+        let symbol_provider = SymbolProvider::from_shading_language(ShadingLanguage::Glsl);
+        let preprocessed_symbol_list = get_all_preprocessed_symbols::<GlslShadingLanguageTag>(
+            &mut shader_module_parser,
+            &symbol_provider,
+            file_path,
+            &shader_content,
+        )
+        .unwrap();
+        let symbol_list = preprocessed_symbol_list.as_ref();
+
+        assert!(symbol_list.variables.iter().any(|symbol| {
+            symbol.label == "inputLight"
+                && match &symbol.data {
+                    ShaderSymbolData::Variables { ty, count: _ } => ty == "Light",
+                    _ => false,
+                }
+        }));
+        assert!(symbol_list.variables.iter().any(|symbol| {
+            symbol.label == "lights"
+                && match &symbol.data {
+                    ShaderSymbolData::Variables { ty, count: _ } => ty == "Light",
+                    _ => false,
+                }
+        }));
+
+        let visible_inside = symbol_list.filter_scoped_symbol(&ShaderFilePosition::new(
+            PathBuf::from(file_path),
+            9,
+            4,
+        ));
+        for variable_visible in ["inputLight", "lights", "copyLight"] {
+            assert!(
+                visible_inside
+                    .variables
+                    .iter()
+                    .any(|symbol| symbol.label == variable_visible),
+                "Failed to find variable {} in function scope {:#?}",
+                variable_visible,
+                visible_inside.variables
+            );
+        }
+
+        let visible_in_main = symbol_list.filter_scoped_symbol(&ShaderFilePosition::new(
+            PathBuf::from(file_path),
+            13,
+            4,
+        ));
+        for variable_not_visible in ["inputLight", "lights", "copyLight"] {
+            assert!(
+                !visible_in_main
+                    .variables
+                    .iter()
+                    .any(|symbol| symbol.label == variable_not_visible),
+                "Variable {} should not leak outside its function scope",
+                variable_not_visible
+            );
+        }
+    }
+    #[test]
     fn uniform_glsl_ok() {
         // Ensure parsing of symbols is OK
         let file_path = Path::new("./test/glsl/uniforms.frag.glsl");
