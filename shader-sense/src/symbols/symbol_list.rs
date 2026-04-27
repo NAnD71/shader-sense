@@ -122,6 +122,24 @@ impl<'a> ShaderSymbolListRef<'a> {
             includes: self.includes.iter().map(|s| (*s).clone()).collect(),
         }
     }
+    fn symbol_locality_key(symbol: &ShaderSymbol) -> (u8, usize, u32, u32) {
+        match &symbol.mode {
+            ShaderSymbolMode::Runtime(runtime) => (
+                2,
+                runtime.scope_stack.len(),
+                runtime.range.start.line,
+                runtime.range.start.pos,
+            ),
+            ShaderSymbolMode::RuntimeContext(_) => (1, 0, 0, 0),
+            ShaderSymbolMode::Intrinsic(_) => (0, 0, 0, 0),
+        }
+    }
+    fn sort_symbols_by_locality(mut symbols: Vec<&'a ShaderSymbol>) -> Vec<&'a ShaderSymbol> {
+        symbols.sort_by(|left, right| {
+            Self::symbol_locality_key(right).cmp(&Self::symbol_locality_key(left))
+        });
+        symbols
+    }
     fn is_symbol_defined_at(
         shader_symbol: &ShaderSymbol,
         cursor_position: &ShaderFilePosition,
@@ -162,11 +180,15 @@ impl<'a> ShaderSymbolListRef<'a> {
         label: &str,
         position: &ShaderFilePosition,
     ) -> Vec<&'a ShaderSymbol> {
-        self.iter()
-            .filter(|s| {
-                !s.is_transient() && s.label == *label && Self::is_symbol_defined_at(s, position)
-            })
-            .collect()
+        Self::sort_symbols_by_locality(
+            self.iter()
+                .filter(|s| {
+                    !s.is_transient()
+                        && s.label == *label
+                        && Self::is_symbol_defined_at(s, position)
+                })
+                .collect(),
+        )
     }
     pub fn filter_scoped_symbol(
         &'a self,
@@ -177,12 +199,14 @@ impl<'a> ShaderSymbolListRef<'a> {
         })
     }
     pub fn find_symbols(&'a self, label: &str) -> Vec<&'a ShaderSymbol> {
-        self.iter()
-            .filter(|s| s.label == *label && !s.is_transient())
-            .collect::<Vec<&ShaderSymbol>>()
+        Self::sort_symbols_by_locality(
+            self.iter()
+                .filter(|s| s.label == *label && !s.is_transient())
+                .collect::<Vec<&ShaderSymbol>>(),
+        )
     }
     pub fn find_symbol(&'a self, label: &str) -> Option<&'a ShaderSymbol> {
-        match self.iter().find(|e| e.label == *label) {
+        match self.find_symbols(label).into_iter().next() {
             Some(symbol) => return Some(symbol),
             None => None,
         }

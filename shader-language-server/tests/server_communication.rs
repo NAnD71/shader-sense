@@ -121,6 +121,26 @@ fn assert_semantic_tokens_include(
     }
 }
 
+fn assert_semantic_tokens_exclude(
+    semantic_tokens: SemanticTokensResult,
+    unexpected: &[(Position, &str, u32)],
+) {
+    let decoded = match semantic_tokens {
+        SemanticTokensResult::Tokens(tokens) => decode_semantic_tokens(&tokens.data),
+        _ => panic!("Expected full semantic tokens response."),
+    };
+    for (unexpected_position, unexpected_label, unexpected_type) in unexpected {
+        assert!(
+            !decoded.iter().any(|(position, token_type, length)| {
+                position == unexpected_position
+                    && token_type == unexpected_type
+                    && *length == unexpected_label.len() as u32
+            }),
+            "Unexpected semantic token {unexpected_label} at {unexpected_position:?} with type {unexpected_type}. Got {decoded:#?}"
+        );
+    }
+}
+
 #[test]
 fn test_server_wasi_runtime() {
     use test_server::TestServer;
@@ -619,6 +639,96 @@ fn test_glsl_semantic_tokens_include_variables_properties_and_functions() {
                     "color",
                     TOKEN_TYPE_PROPERTY,
                 ),
+            ];
+            let semantic_tokens = response.unwrap().unwrap();
+            assert_semantic_tokens_include(semantic_tokens, &expected);
+        },
+    );
+    server.send_notification::<DidCloseTextDocument>(&DidCloseTextDocumentParams {
+        text_document: file.identifier(),
+    });
+}
+
+#[test]
+fn test_glsl_semantic_tokens_do_not_leak_include_declarations() {
+    let mut server = TestServer::desktop().unwrap();
+
+    let file = TestFile::new(
+        Path::new("../shader-sense/test/glsl/semantic-token-include.glsl"),
+        ShadingLanguage::Glsl,
+    );
+
+    server.send_notification::<DidOpenTextDocument>(&DidOpenTextDocumentParams {
+        text_document: file.item(),
+    });
+    server.send_request::<SemanticTokensFullRequest>(
+        &SemanticTokensParams {
+            text_document: file.identifier(),
+            work_done_progress_params: WorkDoneProgressParams::default(),
+            partial_result_params: PartialResultParams::default(),
+        },
+        |response| {
+            let semantic_tokens = response.unwrap().unwrap();
+            assert_semantic_tokens_include(
+                semantic_tokens.clone(),
+                &[
+                    (lsp_types::Position::new(5, 6), "getLight", TOKEN_TYPE_FUNCTION),
+                    (
+                        lsp_types::Position::new(5, 21),
+                        "inputLight",
+                        TOKEN_TYPE_PARAMETER,
+                    ),
+                    (
+                        lsp_types::Position::new(6, 11),
+                        "inputLight",
+                        TOKEN_TYPE_PARAMETER,
+                    ),
+                    (lsp_types::Position::new(10, 10), "light", TOKEN_TYPE_VARIABLE),
+                    (lsp_types::Position::new(11, 4), "light", TOKEN_TYPE_VARIABLE),
+                    (lsp_types::Position::new(11, 10), "color", TOKEN_TYPE_PROPERTY),
+                    (lsp_types::Position::new(11, 18), "getLight", TOKEN_TYPE_FUNCTION),
+                    (lsp_types::Position::new(11, 27), "light", TOKEN_TYPE_VARIABLE),
+                    (lsp_types::Position::new(11, 34), "color", TOKEN_TYPE_PROPERTY),
+                ],
+            );
+            assert_semantic_tokens_exclude(
+                semantic_tokens,
+                &[(lsp_types::Position::new(1, 9), "color", TOKEN_TYPE_PROPERTY)],
+            );
+        },
+    );
+    server.send_notification::<DidCloseTextDocument>(&DidCloseTextDocumentParams {
+        text_document: file.identifier(),
+    });
+}
+
+#[test]
+fn test_glsl_semantic_tokens_prefer_shadowing_variable_over_parameter() {
+    let mut server = TestServer::desktop().unwrap();
+
+    let file = TestFile::new(
+        Path::new("../shader-sense/test/glsl/semantic-token-shadowing.glsl"),
+        ShadingLanguage::Glsl,
+    );
+
+    server.send_notification::<DidOpenTextDocument>(&DidOpenTextDocumentParams {
+        text_document: file.item(),
+    });
+    server.send_request::<SemanticTokensFullRequest>(
+        &SemanticTokensParams {
+            text_document: file.identifier(),
+            work_done_progress_params: WorkDoneProgressParams::default(),
+            partial_result_params: PartialResultParams::default(),
+        },
+        |response| {
+            let expected = [
+                (lsp_types::Position::new(2, 6), "testValue", TOKEN_TYPE_FUNCTION),
+                (lsp_types::Position::new(2, 22), "value", TOKEN_TYPE_PARAMETER),
+                (lsp_types::Position::new(3, 16), "value", TOKEN_TYPE_PARAMETER),
+                (lsp_types::Position::new(5, 14), "value", TOKEN_TYPE_VARIABLE),
+                (lsp_types::Position::new(6, 15), "value", TOKEN_TYPE_VARIABLE),
+                (lsp_types::Position::new(8, 11), "value", TOKEN_TYPE_PARAMETER),
+                (lsp_types::Position::new(12, 19), "testValue", TOKEN_TYPE_FUNCTION),
             ];
             let semantic_tokens = response.unwrap().unwrap();
             assert_semantic_tokens_include(semantic_tokens, &expected);
