@@ -295,13 +295,20 @@ mod tests {
                     _ => false,
                 }
         }));
+        assert!(symbol_list.variables.iter().any(|symbol| {
+            symbol.label == "configurableLights"
+                && match &symbol.data {
+                    ShaderSymbolData::Variables { ty, count } => ty == "Light" && *count == Some(crate::symbols::symbols::ShaderSymbolArray::Expression("MAX_LIGHTS".into())),
+                    _ => false,
+                }
+        }));
 
         let visible_inside = symbol_list.filter_scoped_symbol(&ShaderFilePosition::new(
             PathBuf::from(file_path),
-            9,
+            12,
             4,
         ));
-        for variable_visible in ["inputLight", "lights", "copyLight"] {
+        for variable_visible in ["inputLight", "lights", "configurableLights", "copyLight"] {
             assert!(
                 visible_inside
                     .variables
@@ -315,7 +322,7 @@ mod tests {
 
         let visible_in_main = symbol_list.filter_scoped_symbol(&ShaderFilePosition::new(
             PathBuf::from(file_path),
-            13,
+            16,
             4,
         ));
         for variable_not_visible in ["inputLight", "lights", "copyLight"] {

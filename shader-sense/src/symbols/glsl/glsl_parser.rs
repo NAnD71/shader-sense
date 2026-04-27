@@ -3,7 +3,9 @@ use std::path::Path;
 use crate::position::ShaderRange;
 use crate::symbols::symbol_parser::ShaderSymbolListBuilder;
 
-use crate::symbols::symbols::{ShaderMember, ShaderSymbolMode, ShaderSymbolRuntime};
+use crate::symbols::symbols::{
+    ShaderMember, ShaderSymbolArray, ShaderSymbolMode, ShaderSymbolRuntime,
+};
 use crate::symbols::{
     symbol_parser::{get_name, SymbolTreeParser},
     symbols::{ShaderParameter, ShaderScope, ShaderSignature, ShaderSymbol, ShaderSymbolData},
@@ -335,15 +337,24 @@ impl SymbolTreeParser for GlslVariableTreeParser {
             .iter()
             .find(|c| c.index == 2)
             .map(|c| c.node);
+        let count = if label_node
+            .parent()
+            .is_some_and(|parent| parent.kind() == "array_declarator")
+        {
+            Some(
+                count_node
+                    .map(|node| ShaderSymbolArray::parse(get_name(shader_content, node)))
+                    .unwrap_or(ShaderSymbolArray::Unsized),
+            )
+        } else {
+            None
+        };
         symbols.add_variable(ShaderSymbol {
             label: get_name(shader_content, symbol_match.captures[1].node).into(),
             requirement: None,
             data: ShaderSymbolData::Variables {
                 ty: get_name(shader_content, symbol_match.captures[0].node).into(),
-                count: count_node.map(|n| match get_name(shader_content, n).parse::<u32>() {
-                    Ok(value) => crate::symbols::symbols::ShaderSymbolArray::Fixed(value),
-                    Err(_) => crate::symbols::symbols::ShaderSymbolArray::Unsized,
-                }),
+                count,
             },
             mode: ShaderSymbolMode::Runtime(ShaderSymbolRuntime::new(
                 file_path.into(),

@@ -164,12 +164,65 @@ impl ShaderEnumValue {
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 pub enum ShaderSymbolArray {
     Fixed(u32),
+    Expression(String),
     Unsized,
 }
 
 impl From<u32> for ShaderSymbolArray {
     fn from(value: u32) -> Self {
         Self::Fixed(value)
+    }
+}
+
+impl ShaderSymbolArray {
+    pub fn parse(value: &str) -> Self {
+        let value = value.trim();
+        if value.is_empty() {
+            return Self::Unsized;
+        }
+
+        Self::parse_literal(value)
+            .map(Self::Fixed)
+            .unwrap_or_else(|| Self::Expression(value.into()))
+    }
+
+    fn parse_literal(value: &str) -> Option<u32> {
+        [
+            Some(value),
+            value.strip_suffix('u'),
+            value.strip_suffix('U'),
+            value.strip_suffix("ul"),
+            value.strip_suffix("uL"),
+            value.strip_suffix("Ul"),
+            value.strip_suffix("UL"),
+            value.strip_suffix("lu"),
+            value.strip_suffix("lU"),
+            value.strip_suffix("Lu"),
+            value.strip_suffix("LU"),
+        ]
+        .into_iter()
+        .flatten()
+        .find_map(Self::parse_literal_without_suffix)
+    }
+
+    fn parse_literal_without_suffix(value: &str) -> Option<u32> {
+        if let Some(value) = value.strip_prefix("0x").or_else(|| value.strip_prefix("0X")) {
+            return u32::from_str_radix(value, 16).ok();
+        }
+
+        if value.len() > 1 && value.starts_with('0') && value.chars().all(|c| ('0'..='7').contains(&c)) {
+            return u32::from_str_radix(&value[1..], 8).ok();
+        }
+
+        value.parse::<u32>().ok()
+    }
+
+    fn format_size(&self) -> String {
+        match self {
+            ShaderSymbolArray::Fixed(size) => size.to_string(),
+            ShaderSymbolArray::Expression(expression) => expression.clone(),
+            ShaderSymbolArray::Unsized => String::new(),
+        }
     }
 }
 
@@ -547,10 +600,7 @@ impl ShaderSymbol {
                     "{} {}[{}]",
                     ty,
                     self.label,
-                    match count {
-                        ShaderSymbolArray::Fixed(size) => size.to_string(),
-                        ShaderSymbolArray::Unsized => "".into(),
-                    }
+                    count.format_size()
                 ),
                 None => format!("{} {}", ty, self.label),
             },
@@ -561,10 +611,7 @@ impl ShaderSymbol {
                     ty,
                     context,
                     self.label,
-                    match count {
-                        ShaderSymbolArray::Fixed(size) => size.to_string(),
-                        ShaderSymbolArray::Unsized => "".into(),
-                    }
+                    count.format_size()
                 ),
                 None => format!("{} {}::{}", ty, context, self.label),
             },
