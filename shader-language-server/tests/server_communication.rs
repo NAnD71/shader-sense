@@ -4,7 +4,6 @@
 
 use core::panic;
 use std::collections::HashMap;
-use std::iter::zip;
 use std::path::Path;
 
 use lsp_types::request::{
@@ -30,6 +29,14 @@ use shader_sense::shader::{ShaderStage, ShadingLanguage};
 use test_server::{TestFile, TestServer};
 
 mod test_server;
+
+const TOKEN_TYPE_MACRO: u32 = 0;
+const TOKEN_TYPE_PARAMETER: u32 = 1;
+const TOKEN_TYPE_ENUM: u32 = 3;
+const TOKEN_TYPE_VARIABLE: u32 = 4;
+const TOKEN_TYPE_FUNCTION: u32 = 5;
+const TOKEN_TYPE_TYPE: u32 = 6;
+const TOKEN_TYPE_PROPERTY: u32 = 7;
 
 fn has_document_symbol(response: Option<DocumentSymbolResponse>, symbol: &str) -> bool {
     let symbols = response.unwrap();
@@ -74,6 +81,43 @@ fn get_diagnostic_report(
         }
     } else {
         unreachable!("Should not be reached");
+    }
+}
+
+fn decode_semantic_tokens(tokens: &[lsp_types::SemanticToken]) -> Vec<(Position, u32, u32)> {
+    let mut line = 0;
+    let mut pos = 0;
+    tokens
+        .iter()
+        .map(|token| {
+            line += token.delta_line;
+            pos = if token.delta_line > 0 {
+                token.delta_start
+            } else {
+                pos + token.delta_start
+            };
+            (Position::new(line, pos), token.token_type, token.length)
+        })
+        .collect()
+}
+
+fn assert_semantic_tokens_include(
+    semantic_tokens: SemanticTokensResult,
+    expected: &[(Position, &str, u32)],
+) {
+    let decoded = match semantic_tokens {
+        SemanticTokensResult::Tokens(tokens) => decode_semantic_tokens(&tokens.data),
+        _ => panic!("Expected full semantic tokens response."),
+    };
+    for (expected_position, expected_label, expected_type) in expected {
+        assert!(
+            decoded.iter().any(|(position, token_type, length)| {
+                position == expected_position
+                    && token_type == expected_type
+                    && *length == expected_label.len() as u32
+            }),
+            "Missing semantic token {expected_label} at {expected_position:?} with type {expected_type}. Got {decoded:#?}"
+        );
     }
 }
 
@@ -450,52 +494,134 @@ fn test_semantic_tokens() {
         },
         |response| {
             let expected = [
-                (lsp_types::Position::new(0, 8), "MY_MACRO"),
-                (lsp_types::Position::new(2, 5), "MyEnum"),
-                (lsp_types::Position::new(7, 26), "param0"),
-                (lsp_types::Position::new(7, 39), "param1"),
-                (lsp_types::Position::new(8, 23), "param0"),
-                (lsp_types::Position::new(9, 17), "param1"),
-                (lsp_types::Position::new(9, 26), "MyEnum"),
+                (lsp_types::Position::new(0, 8), "MY_MACRO", TOKEN_TYPE_MACRO),
+                (lsp_types::Position::new(2, 5), "MyEnum", TOKEN_TYPE_ENUM),
+                (
+                    lsp_types::Position::new(7, 26),
+                    "param0",
+                    TOKEN_TYPE_PARAMETER,
+                ),
+                (
+                    lsp_types::Position::new(7, 39),
+                    "param1",
+                    TOKEN_TYPE_PARAMETER,
+                ),
+                (
+                    lsp_types::Position::new(8, 23),
+                    "param0",
+                    TOKEN_TYPE_PARAMETER,
+                ),
+                (
+                    lsp_types::Position::new(9, 17),
+                    "param1",
+                    TOKEN_TYPE_PARAMETER,
+                ),
+                (lsp_types::Position::new(9, 26), "MyEnum", TOKEN_TYPE_ENUM),
             ];
             let semantic_tokens = response.unwrap().unwrap();
-            if let SemanticTokensResult::Tokens(tokens) = semantic_tokens {
-                assert!(
-                    tokens.data.len() == expected.len(),
-                    "Expected {} inlay hint, got {}",
-                    tokens.data.len(),
-                    expected.len()
-                );
-                let mut line = 0;
-                let mut pos = 0;
-                for (semantic_token, (expected_position, expected_label)) in
-                    zip(tokens.data.iter(), expected.iter())
-                {
-                    line = line + semantic_token.delta_line;
-                    pos = if semantic_token.delta_line > 0 {
-                        semantic_token.delta_start
-                    } else {
-                        pos + semantic_token.delta_start
-                    };
-                    assert!(
-                        line == expected_position.line,
-                        "Expected line {} for {}, got line {}",
-                        line,
-                        expected_label,
-                        expected_position.line,
-                    );
-                    assert!(
-                        pos == expected_position.character,
-                        "Expected pos {} for {}, got pos {}",
-                        pos,
-                        expected_label,
-                        expected_position.character,
-                    );
-                    assert!(semantic_token.length == expected_label.len() as u32);
-                }
-            } else {
-                assert!(false);
-            }
+            assert_semantic_tokens_include(semantic_tokens, &expected);
+        },
+    );
+    server.send_notification::<DidCloseTextDocument>(&DidCloseTextDocumentParams {
+        text_document: file.identifier(),
+    });
+}
+
+#[test]
+fn test_glsl_semantic_tokens_include_variables_properties_and_functions() {
+    let mut server = TestServer::desktop().unwrap();
+
+    let file = TestFile::new(
+        Path::new("../shader-sense/test/glsl/semantic-token.glsl"),
+        ShadingLanguage::Glsl,
+    );
+
+    server.send_notification::<DidOpenTextDocument>(&DidOpenTextDocumentParams {
+        text_document: file.item(),
+    });
+    server.send_request::<SemanticTokensFullRequest>(
+        &SemanticTokensParams {
+            text_document: file.identifier(),
+            work_done_progress_params: WorkDoneProgressParams::default(),
+            partial_result_params: PartialResultParams::default(),
+        },
+        |response| {
+            let expected = [
+                (lsp_types::Position::new(2, 7), "Light", TOKEN_TYPE_TYPE),
+                (lsp_types::Position::new(3, 9), "color", TOKEN_TYPE_PROPERTY),
+                (
+                    lsp_types::Position::new(6, 6),
+                    "getLight",
+                    TOKEN_TYPE_FUNCTION,
+                ),
+                (
+                    lsp_types::Position::new(6, 21),
+                    "inputLight",
+                    TOKEN_TYPE_PARAMETER,
+                ),
+                (
+                    lsp_types::Position::new(7, 10),
+                    "copyLight",
+                    TOKEN_TYPE_VARIABLE,
+                ),
+                (
+                    lsp_types::Position::new(7, 22),
+                    "inputLight",
+                    TOKEN_TYPE_PARAMETER,
+                ),
+                (
+                    lsp_types::Position::new(8, 4),
+                    "copyLight",
+                    TOKEN_TYPE_VARIABLE,
+                ),
+                (
+                    lsp_types::Position::new(8, 14),
+                    "color",
+                    TOKEN_TYPE_PROPERTY,
+                ),
+                (
+                    lsp_types::Position::new(8, 22),
+                    "inputLight",
+                    TOKEN_TYPE_PARAMETER,
+                ),
+                (
+                    lsp_types::Position::new(8, 33),
+                    "color",
+                    TOKEN_TYPE_PROPERTY,
+                ),
+                (
+                    lsp_types::Position::new(13, 10),
+                    "lights",
+                    TOKEN_TYPE_VARIABLE,
+                ),
+                (
+                    lsp_types::Position::new(14, 4),
+                    "lights",
+                    TOKEN_TYPE_VARIABLE,
+                ),
+                (
+                    lsp_types::Position::new(14, 14),
+                    "color",
+                    TOKEN_TYPE_PROPERTY,
+                ),
+                (
+                    lsp_types::Position::new(14, 22),
+                    "getLight",
+                    TOKEN_TYPE_FUNCTION,
+                ),
+                (
+                    lsp_types::Position::new(14, 31),
+                    "lights",
+                    TOKEN_TYPE_VARIABLE,
+                ),
+                (
+                    lsp_types::Position::new(14, 42),
+                    "color",
+                    TOKEN_TYPE_PROPERTY,
+                ),
+            ];
+            let semantic_tokens = response.unwrap().unwrap();
+            assert_semantic_tokens_include(semantic_tokens, &expected);
         },
     );
     server.send_notification::<DidCloseTextDocument>(&DidCloseTextDocumentParams {
