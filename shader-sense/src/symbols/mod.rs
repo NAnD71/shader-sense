@@ -291,7 +291,7 @@ mod tests {
         assert!(symbol_list.variables.iter().any(|symbol| {
             symbol.label == "lights"
                 && match &symbol.data {
-                    ShaderSymbolData::Variables { ty, count: _ } => ty == "Light",
+                    ShaderSymbolData::Variables { ty, count } => ty == "Light" && *count == Some(crate::symbols::symbols::ShaderSymbolArray::Fixed(2)),
                     _ => false,
                 }
         }));

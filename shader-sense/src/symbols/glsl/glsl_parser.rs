@@ -330,12 +330,20 @@ impl SymbolTreeParser for GlslVariableTreeParser {
         let _type_qualifier = get_name(shader_content, symbol_match.captures[0].node);
         // TODO: handle values & qualifiers..
         //let _value = get_name(shader_content, matche.captures[2].node);
+        let count_node = symbol_match
+            .captures
+            .iter()
+            .find(|c| c.index == 2)
+            .map(|c| c.node);
         symbols.add_variable(ShaderSymbol {
             label: get_name(shader_content, symbol_match.captures[1].node).into(),
             requirement: None,
             data: ShaderSymbolData::Variables {
                 ty: get_name(shader_content, symbol_match.captures[0].node).into(),
-                count: None,
+                count: count_node.map(|n| match get_name(shader_content, n).parse::<u32>() {
+                    Ok(value) => crate::symbols::symbols::ShaderSymbolArray::Fixed(value),
+                    Err(_) => crate::symbols::symbols::ShaderSymbolArray::Unsized,
+                }),
             },
             mode: ShaderSymbolMode::Runtime(ShaderSymbolRuntime::new(
                 file_path.into(),

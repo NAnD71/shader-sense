@@ -161,7 +161,7 @@ impl ShaderEnumValue {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone)]
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 pub enum ShaderSymbolArray {
     Fixed(u32),
     Unsized,
