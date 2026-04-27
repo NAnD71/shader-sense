@@ -256,49 +256,49 @@ impl ServerLanguage {
                         symbol.label.len(),
                         token_type,
                     );
-                }
-            }
 
-            match &symbol.data {
-                ShaderSymbolData::Struct {
-                    constructors: _,
-                    members,
-                    methods,
-                } => {
-                    for member in members {
-                        if let Some(range) = &member.parameters.range {
-                            Self::push_range_token(
-                                &mut tokens,
-                                range,
-                                member.parameters.label.len(),
-                                TOKEN_TYPE_PROPERTY,
-                            );
+                    match &symbol.data {
+                        ShaderSymbolData::Struct {
+                            constructors: _,
+                            members,
+                            methods,
+                        } => {
+                            for member in members {
+                                if let Some(range) = &member.parameters.range {
+                                    Self::push_range_token(
+                                        &mut tokens,
+                                        range,
+                                        member.parameters.label.len(),
+                                        TOKEN_TYPE_PROPERTY,
+                                    );
+                                }
+                            }
+                            for method in methods {
+                                if let Some(range) = &method.range {
+                                    Self::push_range_token(
+                                        &mut tokens,
+                                        range,
+                                        method.label.len(),
+                                        TOKEN_TYPE_FUNCTION,
+                                    );
+                                }
+                            }
                         }
-                    }
-                    for method in methods {
-                        if let Some(range) = &method.range {
-                            Self::push_range_token(
-                                &mut tokens,
-                                range,
-                                method.label.len(),
-                                TOKEN_TYPE_FUNCTION,
-                            );
+                        ShaderSymbolData::Enum { values } => {
+                            for value in values {
+                                if let Some(range) = &value.range {
+                                    Self::push_range_token(
+                                        &mut tokens,
+                                        range,
+                                        value.label.len(),
+                                        TOKEN_TYPE_ENUM_MEMBER,
+                                    );
+                                }
+                            }
                         }
+                        _ => {}
                     }
                 }
-                ShaderSymbolData::Enum { values } => {
-                    for value in values {
-                        if let Some(range) = &value.range {
-                            Self::push_range_token(
-                                &mut tokens,
-                                range,
-                                value.label.len(),
-                                TOKEN_TYPE_ENUM_MEMBER,
-                            );
-                        }
-                    }
-                }
-                _ => {}
             }
         }
 
@@ -547,96 +547,6 @@ impl ServerLanguage {
             .collect::<Vec<Vec<SemanticToken>>>()
             .concat()
     }
-    fn find_parameters_variables(&mut self, uri: &Url) -> Vec<SemanticToken> {
-        let cached_file = self.watched_files.files.get(uri).unwrap();
-        let symbols = self.watched_files.get_all_symbols(&uri);
-        let file_path = uri.to_file_path().unwrap();
-        let content = &RefCell::borrow(&cached_file.shader_module).content;
-        symbols
-            .functions
-            .iter()
-            .map(|symbol| {
-                let mut tokens = Vec::new();
-                // If we own a scope and have a range.
-                if let ShaderSymbolMode::Runtime(runtime) = &symbol.mode {
-                    if let Some(scope) = &runtime.scope {
-                        if runtime.file_path.as_os_str() == file_path.as_os_str() {
-                            let content_start = scope.start.to_byte_offset(&content).unwrap();
-                            let content_end = scope.end.to_byte_offset(&content).unwrap();
-                            match &symbol.data {
-                                ShaderSymbolData::Functions { signatures } => {
-                                    assert!(
-                                        signatures.len() == 1,
-                                        "Should have only one signature"
-                                    );
-                                    for parameter in &signatures[0].parameters {
-                                        match &parameter.range {
-                                            Some(range) => tokens.push(SemanticToken {
-                                                delta_line: range.start.line,
-                                                delta_start: range.start.pos,
-                                                length: parameter.label.len() as u32,
-                                                token_type: TOKEN_TYPE_PARAMETER,
-                                                token_modifiers_bitset: 0,
-                                            }),
-                                            None => continue, // Should not happen for local symbol, but skip it to be sure...
-                                        }
-                                        // Push occurences in scope
-                                        let reg = Self::get_regex(
-                                            &parameter.label,
-                                            &mut self.regex_cache,
-                                        );
-                                        let word_byte_offsets: Vec<usize> = reg
-                                            .captures_iter(&content[content_start..content_end])
-                                            .map(|e| {
-                                                e.get(0).unwrap().range().start + content_start
-                                            })
-                                            .collect();
-                                        tokens.extend(
-                                            word_byte_offsets
-                                                .iter()
-                                                .filter_map(|byte_offset| {
-                                                    if *byte_offset > 0
-                                                        && &content[byte_offset - 1..*byte_offset]
-                                                            == "."
-                                                    {
-                                                        None // Skip struct param with same name.
-                                                    } else {
-                                                        match ShaderPosition::from_byte_offset(
-                                                            &content,
-                                                            *byte_offset,
-                                                        ) {
-                                                            Ok(position) => Some(SemanticToken {
-                                                                delta_line: position.line,
-                                                                delta_start: position.pos,
-                                                                length: parameter.label.len()
-                                                                    as u32,
-                                                                token_type: TOKEN_TYPE_PARAMETER,
-                                                                token_modifiers_bitset: 0,
-                                                            }),
-                                                            Err(_) => None,
-                                                        }
-                                                    }
-                                                })
-                                                .collect::<Vec<SemanticToken>>(),
-                                        );
-                                    }
-                                }
-                                _ => {} // Nothing to push
-                            }
-                        } else {
-                            // Nothing to push
-                        }
-                    } else {
-                        // Nothing to push
-                    }
-                } else {
-                    // Nothing to push
-                }
-                tokens
-            })
-            .collect::<Vec<Vec<SemanticToken>>>()
-            .concat()
-    }
     pub fn recolt_semantic_tokens(
         &mut self,
         uri: &Url,
@@ -646,7 +556,6 @@ impl ServerLanguage {
         // Find occurences of tokens to paint
         let mut tokens = Vec::new();
         tokens.extend(Self::normalize_tokens(self.find_macros(uri)));
-        tokens.extend(Self::normalize_tokens(self.find_parameters_variables(uri)));
         tokens.extend(Self::normalize_tokens(self.find_enum(uri)));
         tokens.extend(self.find_symbol_declaration_tokens(uri));
         tokens.extend(self.find_identifier_symbol_tokens(uri));
